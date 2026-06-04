@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "check:onedrive": "npm run build && node dist/check-onedrive.js",
     "dev": "tsx watch src/index.ts",
+    "once": "npm run build && node dist/index.js --once",
     "start": "node dist/index.js",
     "lint": "tsc -p tsconfig.json --noEmit"
   },

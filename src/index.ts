@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile, copyFile, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { spawn } from 'node:child_process';
+import ExcelJS from 'exceljs';
 import { EfmsClient } from './client.js';
 import { getAccessToken } from './auth.js';
 import { loadConfig } from './config.js';
+import { downloadFileFromOneDrive, uploadFileToOneDrive } from './onedrive.js';
 
 export { EfmsClient } from './client.js';
 export { getAccessToken } from './auth.js';
@@ -16,9 +17,8 @@ const api1OutputPath = join(dataDir, 'api1-response.json');
 const api2OutputPath = join(dataDir, 'api2-response.json');
 const templateWorkbookPath = join(dataDir, 'Vendor_Payment_Template.xlsx');
 const outputWorkbookPath = join(dataDir, 'Vendor_Payment_Output.xlsx');
-const statePath = join(dataDir, 'Vendor_Payment_Output.state.json');
 const intervalMs = 30 * 60 * 1000;
-const worksheetName = 'Vendor_Payment';
+const worksheetName = 'VENDOR_PAYMENT';
 
 type Api1ResponseFile = {
   meta: {
@@ -46,10 +46,6 @@ type SettlementPayment = {
   dueDate?: string | null;
   datetimeModified?: string | null;
   [key: string]: unknown;
-};
-
-type OutputState = {
-  seenIds: string[];
 };
 
 async function ensureDataDir() {
@@ -90,25 +86,6 @@ function iteratePaymentsFromLastToFirst(payments: SettlementPayment[]): Settleme
   return [...payments].reverse();
 }
 
-async function loadState(): Promise<OutputState> {
-  try {
-    const contents = await readFile(statePath, 'utf8');
-    const parsed = JSON.parse(contents) as Partial<OutputState>;
-    return {
-      seenIds: Array.isArray(parsed.seenIds)
-        ? parsed.seenIds.filter((id): id is string => typeof id === 'string')
-        : [],
-    };
-  } catch {
-    return { seenIds: [] };
-  }
-}
-
-async function saveState(state: OutputState) {
-  await ensureDataDir();
-  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
-}
-
 function getVietnamTimestamp() {
   return new Intl.DateTimeFormat('vi-VN', {
     year: 'numeric',
@@ -134,36 +111,77 @@ async function ensureWorkbookExists() {
   }
 }
 
-async function appendPaymentsToWorkbook(payments: SettlementPayment[]) {
+async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
   await ensureDataDir();
   await ensureWorkbookExists();
 
   const rows = payments
     .map((payment) => ({
+      f: payment.dueDate ?? '',
       h: payment.payeeName ?? '',
       i: payment.settlementNo ?? '',
+      m: payment.requestDate ?? '',
     }))
-    .filter((row) => row.h || row.i);
+    .filter((row) => row.i);
 
   if (!rows.length) {
-    return;
+    return { added: 0, updated: 0 };
   }
 
-  const tempScriptPath = join(dataDir, 'append-payments.py');
-  const script = `from openpyxl import load_workbook\npath = r'''${outputWorkbookPath}'''\nwb = load_workbook(path)\nws = wb['${worksheetName}']\nrows = ${JSON.stringify(rows, null, 2)}\nfor row in rows:\n    ws.append([None, None, None, None, None, None, None, row['h'], row['i']])\nwb.save(path)\n`;
-  await writeFile(tempScriptPath, script, 'utf8');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(outputWorkbookPath);
+  const worksheet = workbook.getWorksheet(worksheetName);
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('python', [tempScriptPath], { stdio: 'inherit' });
-      child.on('exit', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Failed to append workbook rows (exit code ${code ?? 'unknown'})`));
-      });
-    });
-  } finally {
-    await unlink(tempScriptPath).catch(() => undefined);
+  if (!worksheet) {
+    throw new Error(`Worksheet not found: ${worksheetName}`);
   }
+
+  const rowsBySettlementNo = new Map<string, ExcelJS.Row>();
+  worksheet.eachRow((row) => {
+    const settlementNo = String(row.getCell(9).value ?? '').trim();
+    if (settlementNo) {
+      rowsBySettlementNo.set(settlementNo, row);
+    }
+  });
+
+  let added = 0;
+  let updated = 0;
+
+  for (const row of rows) {
+    const settlementNo = row.i.trim();
+    const existingRow = rowsBySettlementNo.get(settlementNo);
+
+    if (!existingRow) {
+      worksheet.addRow([null, null, null, null, null, row.f, null, row.h, row.i, null, null, null, row.m]);
+      rowsBySettlementNo.set(settlementNo, worksheet.lastRow!);
+      added += 1;
+      continue;
+    }
+
+    const managedCells = [
+      { column: 6, value: row.f },
+      { column: 8, value: row.h },
+      { column: 13, value: row.m },
+    ];
+    let rowChanged = false;
+
+    for (const cell of managedCells) {
+      if (String(existingRow.getCell(cell.column).value ?? '') !== cell.value) {
+        existingRow.getCell(cell.column).value = cell.value;
+        rowChanged = true;
+      }
+    }
+
+    if (rowChanged) {
+      updated += 1;
+    }
+  }
+
+  if (added || updated) {
+    await workbook.xlsx.writeFile(outputWorkbookPath);
+  }
+
+  return { added, updated };
 }
 
 async function runOnce() {
@@ -195,19 +213,22 @@ async function runOnce() {
   await saveApi2Response(data);
   logStep('api2', 'đã lưu API 2');
 
-  const state = await loadState();
-  const seenIds = new Set(state.seenIds);
-  const incomingRows = iteratePaymentsFromLastToFirst(
-    (data.data ?? []).filter((item) => item.id && !seenIds.has(item.id)),
-  );
+  const payments = iteratePaymentsFromLastToFirst(data.data ?? []);
 
-  if (incomingRows.length) {
-    await appendPaymentsToWorkbook(incomingRows);
-    for (const row of incomingRows) {
-      if (row.id) seenIds.add(row.id);
+  if (payments.length) {
+    if (config.oneDrive) {
+      await ensureDataDir();
+      await downloadFileFromOneDrive(outputWorkbookPath, config.oneDrive);
+      logStep('onedrive', 'đã tải workbook hiện tại');
     }
-    await saveState({ seenIds: [...seenIds] });
-    logStep('workbook', `cập nhật ${incomingRows.length} dòng mới`);
+
+    const result = await upsertPaymentsInWorkbook(payments);
+    logStep('workbook', `thêm ${result.added} dòng, cập nhật ${result.updated} dòng`);
+
+    if (config.oneDrive && (result.added || result.updated)) {
+      await uploadFileToOneDrive(outputWorkbookPath, config.oneDrive);
+      logStep('onedrive', 'đã cập nhật workbook');
+    }
   } else {
     logStep('workbook', 'không có dòng mới');
   }
@@ -231,5 +252,13 @@ async function startScheduler() {
 }
 
 if (isDirectRun) {
-  void startScheduler();
+  if (process.argv.includes('--once')) {
+    void runOnce().catch((error) => {
+      logStep('run-failed', 'thất bại');
+      console.error(error);
+      process.exitCode = 1;
+    });
+  } else {
+    void startScheduler();
+  }
 }

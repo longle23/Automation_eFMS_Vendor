@@ -15,6 +15,15 @@ export interface AppConfig {
   timeoutMs: number;
   settlementPaymentUrl: string;
   settlementPaymentRequester: string;
+  oneDrive?: OneDriveConfig;
+}
+
+export interface OneDriveConfig {
+  tenantId: string;
+  clientId: string;
+  clientSecret: string;
+  userId: string;
+  fileId: string;
 }
 
 const DEFAULT_TOKEN_PATH = '/identityserver/connect/token';
@@ -35,6 +44,14 @@ export function loadConfig(): AppConfig {
   const timeoutMs = Number(process.env.EFMS_TIMEOUT_MS ?? '15000');
   const settlementPaymentUrl = process.env.EFMS_SETTLEMENT_PAYMENT_URL ?? DEFAULT_SETTLEMENT_PAYMENT_URL;
   const settlementPaymentRequester = process.env.EFMS_SETTLEMENT_PAYMENT_REQUESTER?.trim();
+  const oneDriveValues = {
+    tenantId: process.env.ONEDRIVE_TENANT_ID?.trim(),
+    clientId: process.env.ONEDRIVE_CLIENT_ID?.trim(),
+    clientSecret: process.env.ONEDRIVE_CLIENT_SECRET?.trim(),
+    userId: process.env.ONEDRIVE_USER_ID?.trim(),
+    fileId: process.env.ONEDRIVE_FILE_ID?.trim(),
+  };
+  const configuredOneDriveValues = Object.values(oneDriveValues).filter(Boolean);
   const extraHeaders: Record<string, string> = {};
 
   if (companyId) {
@@ -58,6 +75,10 @@ export function loadConfig(): AppConfig {
     throw new Error('Missing EFMS_SETTLEMENT_PAYMENT_REQUESTER in .env');
   }
 
+  if (configuredOneDriveValues.length > 0 && configuredOneDriveValues.length < 5) {
+    throw new Error('OneDrive configuration is incomplete in .env');
+  }
+
   return {
     baseUrl,
     tokenPath,
@@ -71,5 +92,15 @@ export function loadConfig(): AppConfig {
     timeoutMs,
     settlementPaymentUrl,
     settlementPaymentRequester,
+    oneDrive:
+      configuredOneDriveValues.length === 5
+        ? {
+            tenantId: oneDriveValues.tenantId!,
+            clientId: oneDriveValues.clientId!,
+            clientSecret: oneDriveValues.clientSecret!,
+            userId: oneDriveValues.userId!,
+            fileId: oneDriveValues.fileId!,
+          }
+        : undefined,
   };
 }

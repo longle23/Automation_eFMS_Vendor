@@ -1,5 +1,7 @@
 # Node.js dependencies
 node_modules/
+.codegraph
+.cursor
 
 # Build output
 dist/
