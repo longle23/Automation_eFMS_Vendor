@@ -15,6 +15,18 @@ export interface AppConfig {
   timeoutMs: number;
   settlementPaymentUrl: string;
   settlementPaymentRequester: string;
+  oneDrive?: OneDriveConfig;
+}
+
+export interface OneDriveConfig {
+  tenantId: string;
+  clientId: string;
+  clientSecret: string;
+  userId?: string;
+  userPrincipalName?: string;
+  driveId?: string;
+  remotePath?: string;
+  fileId: string;
 }
 
 const DEFAULT_TOKEN_PATH = '/identityserver/connect/token';
@@ -35,6 +47,32 @@ export function loadConfig(): AppConfig {
   const timeoutMs = Number(process.env.EFMS_TIMEOUT_MS ?? '15000');
   const settlementPaymentUrl = process.env.EFMS_SETTLEMENT_PAYMENT_URL ?? DEFAULT_SETTLEMENT_PAYMENT_URL;
   const settlementPaymentRequester = process.env.EFMS_SETTLEMENT_PAYMENT_REQUESTER?.trim();
+  const oneDriveValues = {
+    tenantId: process.env.ONEDRIVE_TENANT_ID?.trim(),
+    clientId: process.env.ONEDRIVE_CLIENT_ID?.trim(),
+    clientSecret: process.env.ONEDRIVE_CLIENT_SECRET?.trim(),
+    userId: process.env.ONEDRIVE_USER_ID?.trim(),
+    userPrincipalName: process.env.ONEDRIVE_USER_PRINCIPAL_NAME?.trim(),
+    driveId: process.env.ONEDRIVE_DRIVE_ID?.trim(),
+    remotePath: process.env.ONEDRIVE_REMOTE_PATH?.trim(),
+    fileId: process.env.ONEDRIVE_FILE_ID?.trim(),
+  };
+  const hasOneDriveBaseConfig = Boolean(
+      oneDriveValues.tenantId ||
+      oneDriveValues.clientId ||
+      oneDriveValues.clientSecret ||
+      oneDriveValues.fileId ||
+      oneDriveValues.userId ||
+      oneDriveValues.userPrincipalName ||
+      oneDriveValues.driveId,
+  );
+  const hasOneDriveConfig = Boolean(
+      oneDriveValues.tenantId &&
+      oneDriveValues.clientId &&
+      oneDriveValues.clientSecret &&
+      oneDriveValues.fileId &&
+      (oneDriveValues.userId || oneDriveValues.userPrincipalName || oneDriveValues.driveId),
+  );
   const extraHeaders: Record<string, string> = {};
 
   if (companyId) {
@@ -58,6 +96,10 @@ export function loadConfig(): AppConfig {
     throw new Error('Missing EFMS_SETTLEMENT_PAYMENT_REQUESTER in .env');
   }
 
+  if (hasOneDriveBaseConfig && !hasOneDriveConfig) {
+    throw new Error('OneDrive configuration is incomplete in .env. Provide ONEDRIVE_FILE_ID and one of ONEDRIVE_USER_ID, ONEDRIVE_USER_PRINCIPAL_NAME, or ONEDRIVE_DRIVE_ID.');
+  }
+
   return {
     baseUrl,
     tokenPath,
@@ -71,5 +113,18 @@ export function loadConfig(): AppConfig {
     timeoutMs,
     settlementPaymentUrl,
     settlementPaymentRequester,
+    oneDrive:
+      hasOneDriveConfig
+        ? {
+            tenantId: oneDriveValues.tenantId!,
+            clientId: oneDriveValues.clientId!,
+            clientSecret: oneDriveValues.clientSecret!,
+            userId: oneDriveValues.userId || undefined,
+            userPrincipalName: oneDriveValues.userPrincipalName || undefined,
+            driveId: oneDriveValues.driveId || undefined,
+            remotePath: oneDriveValues.remotePath || undefined,
+            fileId: oneDriveValues.fileId!,
+          }
+        : undefined,
   };
 }
