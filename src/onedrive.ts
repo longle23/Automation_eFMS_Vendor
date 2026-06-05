@@ -37,10 +37,28 @@ async function getGraphAccessToken(config: OneDriveConfig): Promise<string> {
   return body.access_token;
 }
 
+function buildDriveItemUrl(config: OneDriveConfig, suffix = ''): string {
+  const encodedFileId = encodeURIComponent(config.fileId);
+
+  if (config.driveId) {
+    return `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(config.driveId)}/items/${encodedFileId}${suffix}`;
+  }
+
+  if (config.userId) {
+    return `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.userId)}/drive/items/${encodedFileId}${suffix}`;
+  }
+
+  if (config.userPrincipalName) {
+    return `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.userPrincipalName)}/drive/items/${encodedFileId}${suffix}`;
+  }
+
+  throw new Error('OneDrive configuration requires ONEDRIVE_USER_ID, ONEDRIVE_USER_PRINCIPAL_NAME, or ONEDRIVE_DRIVE_ID');
+}
+
 export async function checkOneDriveFile(config: OneDriveConfig): Promise<string> {
   const token = await getGraphAccessToken(config);
   const response = await fetch(
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.userId)}/drive/items/${encodeURIComponent(config.fileId)}`,
+    buildDriveItemUrl(config),
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -64,7 +82,7 @@ export async function uploadFileToOneDrive(filePath: string, config: OneDriveCon
   const token = await getGraphAccessToken(config);
   const file = await readFile(filePath);
   const uploadResponse = await fetch(
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.userId)}/drive/items/${encodeURIComponent(config.fileId)}/content`,
+    buildDriveItemUrl(config, '/content'),
     {
       method: 'PUT',
       headers: {
@@ -85,7 +103,7 @@ export async function uploadFileToOneDrive(filePath: string, config: OneDriveCon
 export async function downloadFileFromOneDrive(filePath: string, config: OneDriveConfig): Promise<void> {
   const token = await getGraphAccessToken(config);
   const response = await fetch(
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(config.userId)}/drive/items/${encodeURIComponent(config.fileId)}/content`,
+    buildDriveItemUrl(config, '/content'),
     {
       headers: {
         Authorization: `Bearer ${token}`,

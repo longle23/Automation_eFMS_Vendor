@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
+﻿import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ExcelJS from 'exceljs';
@@ -118,9 +118,13 @@ async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
   const rows = payments
     .map((payment) => ({
       f: payment.dueDate ?? '',
+      g: typeof payment.note === 'string' ? payment.note : '',
       h: payment.payeeName ?? '',
       i: payment.settlementNo ?? '',
+      l: typeof payment.amount === 'number' || typeof payment.amount === 'string' ? payment.amount : '',
       m: payment.requestDate ?? '',
+      u: typeof payment.statusApprovalName === 'string' ? payment.statusApprovalName : '',
+      v: typeof payment.departmentName === 'string' ? payment.departmentName : '',
     }))
     .filter((row) => row.i);
 
@@ -152,7 +156,30 @@ async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
     const existingRow = rowsBySettlementNo.get(settlementNo);
 
     if (!existingRow) {
-      worksheet.addRow([null, null, null, null, null, row.f, null, row.h, row.i, null, null, null, row.m]);
+      worksheet.addRow([
+        null,
+        null,
+        null,
+        null,
+        null,
+        row.f,
+        row.g,
+        row.h,
+        row.i,
+        null,
+        null,
+        row.l,
+        row.m,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        row.u,
+        row.v,
+      ]);
       rowsBySettlementNo.set(settlementNo, worksheet.lastRow!);
       added += 1;
       continue;
@@ -160,8 +187,12 @@ async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
 
     const managedCells = [
       { column: 6, value: row.f },
+      { column: 7, value: row.g },
       { column: 8, value: row.h },
+      { column: 12, value: row.l },
       { column: 13, value: row.m },
+      { column: 21, value: row.u },
+      { column: 22, value: row.v },
     ];
     let rowChanged = false;
 

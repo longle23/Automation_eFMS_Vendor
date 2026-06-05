@@ -22,7 +22,10 @@ export interface OneDriveConfig {
   tenantId: string;
   clientId: string;
   clientSecret: string;
-  userId: string;
+  userId?: string;
+  userPrincipalName?: string;
+  driveId?: string;
+  remotePath?: string;
   fileId: string;
 }
 
@@ -49,9 +52,27 @@ export function loadConfig(): AppConfig {
     clientId: process.env.ONEDRIVE_CLIENT_ID?.trim(),
     clientSecret: process.env.ONEDRIVE_CLIENT_SECRET?.trim(),
     userId: process.env.ONEDRIVE_USER_ID?.trim(),
+    userPrincipalName: process.env.ONEDRIVE_USER_PRINCIPAL_NAME?.trim(),
+    driveId: process.env.ONEDRIVE_DRIVE_ID?.trim(),
+    remotePath: process.env.ONEDRIVE_REMOTE_PATH?.trim(),
     fileId: process.env.ONEDRIVE_FILE_ID?.trim(),
   };
-  const configuredOneDriveValues = Object.values(oneDriveValues).filter(Boolean);
+  const hasOneDriveBaseConfig = Boolean(
+      oneDriveValues.tenantId ||
+      oneDriveValues.clientId ||
+      oneDriveValues.clientSecret ||
+      oneDriveValues.fileId ||
+      oneDriveValues.userId ||
+      oneDriveValues.userPrincipalName ||
+      oneDriveValues.driveId,
+  );
+  const hasOneDriveConfig = Boolean(
+      oneDriveValues.tenantId &&
+      oneDriveValues.clientId &&
+      oneDriveValues.clientSecret &&
+      oneDriveValues.fileId &&
+      (oneDriveValues.userId || oneDriveValues.userPrincipalName || oneDriveValues.driveId),
+  );
   const extraHeaders: Record<string, string> = {};
 
   if (companyId) {
@@ -75,8 +96,8 @@ export function loadConfig(): AppConfig {
     throw new Error('Missing EFMS_SETTLEMENT_PAYMENT_REQUESTER in .env');
   }
 
-  if (configuredOneDriveValues.length > 0 && configuredOneDriveValues.length < 5) {
-    throw new Error('OneDrive configuration is incomplete in .env');
+  if (hasOneDriveBaseConfig && !hasOneDriveConfig) {
+    throw new Error('OneDrive configuration is incomplete in .env. Provide ONEDRIVE_FILE_ID and one of ONEDRIVE_USER_ID, ONEDRIVE_USER_PRINCIPAL_NAME, or ONEDRIVE_DRIVE_ID.');
   }
 
   return {
@@ -93,12 +114,15 @@ export function loadConfig(): AppConfig {
     settlementPaymentUrl,
     settlementPaymentRequester,
     oneDrive:
-      configuredOneDriveValues.length === 5
+      hasOneDriveConfig
         ? {
             tenantId: oneDriveValues.tenantId!,
             clientId: oneDriveValues.clientId!,
             clientSecret: oneDriveValues.clientSecret!,
-            userId: oneDriveValues.userId!,
+            userId: oneDriveValues.userId || undefined,
+            userPrincipalName: oneDriveValues.userPrincipalName || undefined,
+            driveId: oneDriveValues.driveId || undefined,
+            remotePath: oneDriveValues.remotePath || undefined,
             fileId: oneDriveValues.fileId!,
           }
         : undefined,
