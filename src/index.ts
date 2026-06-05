@@ -25,6 +25,7 @@ const outputWorkbookPath = join(dataDir, 'Vendor_Payment_Output.xlsx');
 const envPath = join(process.cwd(), '.env');
 const intervalMs = 30 * 60 * 1000;
 const worksheetName = 'VENDOR_PAYMENT';
+const legacyWorksheetName = 'Vendor_Payment';
 const remoteWorkbookName = 'VENDOR_PAYMENT.xlsx';
 
 type Api1ResponseFile = {
@@ -157,10 +158,10 @@ async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(outputWorkbookPath);
-  const worksheet = workbook.getWorksheet(worksheetName);
+  const worksheet = workbook.getWorksheet(worksheetName) ?? workbook.getWorksheet(legacyWorksheetName);
 
   if (!worksheet) {
-    throw new Error(`Worksheet not found: ${worksheetName}`);
+    throw new Error(`Worksheet not found: ${worksheetName} or ${legacyWorksheetName}`);
   }
 
   const rowsBySettlementNo = new Map<string, ExcelJS.Row>();
