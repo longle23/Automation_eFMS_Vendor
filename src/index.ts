@@ -209,30 +209,9 @@ function getWorksheetFieldByHeader(worksheet: ExcelJS.Worksheet, headerName: str
 }
 
 function getPaymentRowValues(payment: SettlementPayment) {
-  return [
-    payment['taxCode'] ?? payment['mst'] ?? '',
-    payment['vendorCode'] ?? '',
-    payment['payeeName'] ?? '',
-    payment['contractNo'] ?? '',
-    payment['contractDueDate'] ?? '',
-    payment['paymentDueDate'] ?? payment.dueDate ?? '',
-    payment['serviceName'] ?? payment['paymentMethodName'] ?? '',
-    payment.payeeName ?? '',
-    payment.settlementNo ?? '',
-    payment['invoiceNo'] ?? payment['voucherNo'] ?? '',
-    payment['invoiceDate'] ?? payment.requestDate ?? '',
-    payment.amount ?? '',
-    payment['createdAt'] ?? payment.datetimeModified ?? '',
-    payment['approvedAt'] ?? '',
-    payment['accountedAt'] ?? '',
-    payment['note'] ?? '',
-    payment.dueDate ?? '',
-    payment['overDueDate'] ?? '',
-    payment['unpaidReason'] ?? '',
-    payment['debitNo'] ?? '',
-    payment['statusApprovalName'] ?? payment['statusApproval'] ?? '',
-    payment['consigned'] ?? '',
-  ];
+  const rowValues = new Array(22).fill('');
+  rowValues[8] = payment.settlementNo ?? '';
+  return rowValues;
 }
 
 async function syncPaymentsToWorkbook(payments: SettlementPayment[], previousState: Api2StateFile): Promise<SyncResult> {
@@ -287,30 +266,35 @@ async function syncPaymentsToWorkbook(payments: SettlementPayment[], previousSta
     }
 
     const signature = stringifyPaymentSignature(payment);
-    const existingRow = rowsById.get(id) ?? (settlementNo ? rowsBySettlementNo.get(settlementNo) : undefined);
     const previousSignature = previousState.items[id];
-
-    if (!existingRow) {
-      worksheet.addRow(getPaymentRowValues(payment));
-      const newRow = worksheet.lastRow!;
-      rowsById.set(id, newRow);
-      if (settlementNo) {
-        rowsBySettlementNo.set(settlementNo, newRow);
-      }
-      added += 1;
-      continue;
-    }
+    const existingRow = rowsById.get(id) ?? (settlementNo ? rowsBySettlementNo.get(settlementNo) : undefined);
 
     if (previousSignature === signature) {
       unchanged += 1;
       continue;
     }
 
-    const nextValues = getPaymentRowValues(payment);
-    nextValues.forEach((value, index) => {
-      existingRow.getCell(index + 1).value = value as ExcelJS.CellValue;
-    });
-    updated += 1;
+    if (existingRow) {
+      const nextValues = getPaymentRowValues(payment);
+      nextValues.forEach((value, index) => {
+        existingRow.getCell(index + 1).value = value as ExcelJS.CellValue;
+      });
+      updated += 1;
+      continue;
+    }
+
+    if (previousSignature) {
+      unchanged += 1;
+      continue;
+    }
+
+    worksheet.addRow(getPaymentRowValues(payment));
+    const newRow = worksheet.lastRow!;
+    rowsById.set(id, newRow);
+    if (settlementNo) {
+      rowsBySettlementNo.set(settlementNo, newRow);
+    }
+    added += 1;
   }
 
   if (added || updated) {
