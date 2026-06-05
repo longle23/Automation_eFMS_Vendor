@@ -5,7 +5,12 @@ import ExcelJS from 'exceljs';
 import { EfmsClient } from './client.js';
 import { getAccessToken } from './auth.js';
 import { loadConfig } from './config.js';
-import { downloadFileFromOneDrive, uploadFileToOneDrive } from './onedrive.js';
+import {
+  downloadFileFromOneDrive,
+  isOneDriveNotFoundError,
+  uploadFileToOneDrive,
+  uploadFileToOneDrivePath,
+} from './onedrive.js';
 
 export { EfmsClient } from './client.js';
 export { getAccessToken } from './auth.js';
@@ -17,8 +22,10 @@ const api1OutputPath = join(dataDir, 'api1-response.json');
 const api2OutputPath = join(dataDir, 'api2-response.json');
 const templateWorkbookPath = join(dataDir, 'Vendor_Payment_Template.xlsx');
 const outputWorkbookPath = join(dataDir, 'Vendor_Payment_Output.xlsx');
+const envPath = join(process.cwd(), '.env');
 const intervalMs = 30 * 60 * 1000;
 const worksheetName = 'VENDOR_PAYMENT';
+const remoteWorkbookName = 'VENDOR_PAYMENT.xlsx';
 
 type Api1ResponseFile = {
   meta: {
@@ -111,20 +118,36 @@ async function ensureWorkbookExists() {
   }
 }
 
+async function resetWorkbookFromTemplate() {
+  await ensureDataDir();
+  await copyFile(templateWorkbookPath, outputWorkbookPath);
+}
+
+async function updateEnvValue(key: string, value: string) {
+  let contents = '';
+
+  try {
+    contents = await readFile(envPath, 'utf8');
+  } catch {
+    contents = '';
+  }
+
+  const line = `${key}=${value}`;
+  const pattern = new RegExp(`^${key}=.*$`, 'm');
+  const nextContents = pattern.test(contents)
+    ? contents.replace(pattern, line)
+    : `${contents.trimEnd()}\n${line}\n`;
+
+  await writeFile(envPath, nextContents, 'utf8');
+}
+
 async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
   await ensureDataDir();
   await ensureWorkbookExists();
 
   const rows = payments
     .map((payment) => ({
-      f: payment.dueDate ?? '',
-      g: typeof payment.note === 'string' ? payment.note : '',
-      h: payment.payeeName ?? '',
       i: payment.settlementNo ?? '',
-      l: typeof payment.amount === 'number' || typeof payment.amount === 'string' ? payment.amount : '',
-      m: payment.requestDate ?? '',
-      u: typeof payment.statusApprovalName === 'string' ? payment.statusApprovalName : '',
-      v: typeof payment.departmentName === 'string' ? payment.departmentName : '',
     }))
     .filter((row) => row.i);
 
@@ -156,56 +179,13 @@ async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
     const existingRow = rowsBySettlementNo.get(settlementNo);
 
     if (!existingRow) {
-      worksheet.addRow([
-        null,
-        null,
-        null,
-        null,
-        null,
-        row.f,
-        row.g,
-        row.h,
-        row.i,
-        null,
-        null,
-        row.l,
-        row.m,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        row.u,
-        row.v,
-      ]);
+      worksheet.addRow([null, null, null, null, null, null, null, null, row.i]);
       rowsBySettlementNo.set(settlementNo, worksheet.lastRow!);
       added += 1;
       continue;
     }
 
-    const managedCells = [
-      { column: 6, value: row.f },
-      { column: 7, value: row.g },
-      { column: 8, value: row.h },
-      { column: 12, value: row.l },
-      { column: 13, value: row.m },
-      { column: 21, value: row.u },
-      { column: 22, value: row.v },
-    ];
-    let rowChanged = false;
-
-    for (const cell of managedCells) {
-      if (String(existingRow.getCell(cell.column).value ?? '') !== cell.value) {
-        existingRow.getCell(cell.column).value = cell.value;
-        rowChanged = true;
-      }
-    }
-
-    if (rowChanged) {
-      updated += 1;
-    }
+    // Existing rows are matched by settlementNo only. No other columns are managed.
   }
 
   if (added || updated) {
@@ -213,6 +193,22 @@ async function upsertPaymentsInWorkbook(payments: SettlementPayment[]) {
   }
 
   return { added, updated };
+}
+
+async function prepareWorkbookFromOneDrive(config: NonNullable<ReturnType<typeof loadConfig>['oneDrive']>) {
+  await ensureDataDir();
+
+  try {
+    await downloadFileFromOneDrive(outputWorkbookPath, config);
+    return { createdFromTemplate: false };
+  } catch (error) {
+    if (!isOneDriveNotFoundError(error)) {
+      throw error;
+    }
+
+    await resetWorkbookFromTemplate();
+    return { createdFromTemplate: true };
+  }
 }
 
 async function runOnce() {
@@ -247,17 +243,35 @@ async function runOnce() {
   const payments = iteratePaymentsFromLastToFirst(data.data ?? []);
 
   if (payments.length) {
+    let createdWorkbookFromTemplate = false;
+
     if (config.oneDrive) {
-      await ensureDataDir();
-      await downloadFileFromOneDrive(outputWorkbookPath, config.oneDrive);
-      logStep('onedrive', 'đã tải workbook hiện tại');
+      const workbook = await prepareWorkbookFromOneDrive(config.oneDrive);
+      createdWorkbookFromTemplate = workbook.createdFromTemplate;
+      logStep(
+        'onedrive',
+        createdWorkbookFromTemplate
+          ? 'không tìm thấy workbook, đã tạo mới từ template'
+          : 'đã tải workbook hiện tại',
+      );
     }
 
     const result = await upsertPaymentsInWorkbook(payments);
     logStep('workbook', `thêm ${result.added} dòng, cập nhật ${result.updated} dòng`);
 
     if (config.oneDrive && (result.added || result.updated)) {
-      await uploadFileToOneDrive(outputWorkbookPath, config.oneDrive);
+      if (createdWorkbookFromTemplate) {
+        const uploadedFile = await uploadFileToOneDrivePath(outputWorkbookPath, config.oneDrive, remoteWorkbookName);
+
+        if (!uploadedFile.id) {
+          throw new Error('OneDrive path upload did not return a new file id');
+        }
+
+        await updateEnvValue('ONEDRIVE_FILE_ID', uploadedFile.id);
+        logStep('onedrive', `đã cập nhật ONEDRIVE_FILE_ID=${uploadedFile.id}`);
+      } else {
+        await uploadFileToOneDrive(outputWorkbookPath, config.oneDrive);
+      }
       logStep('onedrive', 'đã cập nhật workbook');
     }
   } else {
