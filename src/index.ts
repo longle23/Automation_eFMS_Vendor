@@ -20,6 +20,7 @@ const isDirectRun = import.meta.url === pathToFileURL(process.argv[1] ?? '').hre
 const dataDir = join(process.cwd(), 'data');
 const api1OutputPath = join(dataDir, 'api1-response.json');
 const api2OutputPath = join(dataDir, 'api2-response.json');
+const api3OutputPath = join(dataDir, 'api3-response.json');
 const api2StatePath = join(dataDir, 'api2-state.json');
 const templateWorkbookPath = join(dataDir, 'Vendor_Payment_Template.xlsx');
 const outputWorkbookPath = join(dataDir, 'Vendor_Payment_Output.xlsx');
@@ -47,6 +48,14 @@ type Api2ResponseFile = {
   response: unknown;
 };
 
+type Api3ResponseFile = {
+  meta: {
+    lastRunAt: string;
+    settlementCount: number;
+  };
+  response: Record<string, unknown>;
+};
+
 type SettlementPayment = {
   id?: string;
   settlementNo?: string | null;
@@ -54,6 +63,13 @@ type SettlementPayment = {
   requestDate?: string | null;
   dueDate?: string | null;
   datetimeModified?: string | null;
+  [key: string]: unknown;
+};
+
+type SettlementApprovalInfo = {
+  requesterAprDate?: string | null;
+  managerAprDate?: string | null;
+  accountantAprDate?: string | null;
   [key: string]: unknown;
 };
 
@@ -105,6 +121,20 @@ async function saveApi2Response(data: unknown) {
   await writeFile(api2OutputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
+async function saveApi3Response(data: Record<string, unknown>) {
+  await ensureDataDir();
+
+  const payload: Api3ResponseFile = {
+    meta: {
+      lastRunAt: new Date().toISOString(),
+      settlementCount: Object.keys(data).length,
+    },
+    response: data,
+  };
+
+  await writeFile(api3OutputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
 function iteratePaymentsFromLastToFirst(payments: SettlementPayment[]): SettlementPayment[] {
   return [...payments].reverse();
 }
@@ -125,6 +155,10 @@ function getPaymentId(payment: SettlementPayment) {
 
 function getPaymentSettlementNo(payment: SettlementPayment) {
   return String(payment.settlementNo ?? '').trim();
+}
+
+function getUniqueSettlementNos(payments: SettlementPayment[]) {
+  return [...new Set(payments.map((payment) => getPaymentSettlementNo(payment)).filter(Boolean))];
 }
 
 function getVietnamTimestamp() {
@@ -208,6 +242,38 @@ function getWorksheetFieldByHeader(worksheet: ExcelJS.Worksheet, headerName: str
   return null;
 }
 
+function formatApprovalDate(value?: string | null) {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat('vi-VN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+function getSettlementApprovalRowValues(
+  payment: SettlementPayment,
+  approvalInfo?: SettlementApprovalInfo,
+) {
+  const rowValues = getPaymentRowValues(payment);
+  rowValues[12] = formatApprovalDate(approvalInfo?.requesterAprDate);
+  rowValues[13] = formatApprovalDate(approvalInfo?.managerAprDate);
+  rowValues[14] = formatApprovalDate(approvalInfo?.accountantAprDate);
+  return rowValues;
+}
+
 function extractInvoiceOrStatementNo(note?: string | null) {
   const text = String(note ?? '').trim();
   const match = text.match(/\bHD\s*([0-9]+)\b/i);
@@ -223,7 +289,11 @@ function getPaymentRowValues(payment: SettlementPayment) {
   return rowValues;
 }
 
-async function syncPaymentsToWorkbook(payments: SettlementPayment[], previousState: Api2StateFile): Promise<SyncResult> {
+async function syncPaymentsToWorkbook(
+  payments: SettlementPayment[],
+  approvalInfoBySettlementNo: Record<string, SettlementApprovalInfo>,
+  previousState: Api2StateFile,
+): Promise<SyncResult> {
   await ensureDataDir();
   await ensureWorkbookExists();
 
@@ -239,10 +309,8 @@ async function syncPaymentsToWorkbook(payments: SettlementPayment[], previousSta
     throw new Error(`Worksheet not found: ${worksheetName} or ${legacyWorksheetName}`);
   }
 
-  const idColumn = getWorksheetFieldByHeader(worksheet, 'SỐ ĐNTT-FMS');
-  const settlementColumn = getWorksheetFieldByHeader(worksheet, 'NCC');
+  const settlementNoColumn = getWorksheetFieldByHeader(worksheet, 'SỐ ĐNTT-FMS');
 
-  const rowsById = new Map<string, ExcelJS.Row>();
   const rowsBySettlementNo = new Map<string, ExcelJS.Row>();
 
   worksheet.eachRow((row, rowNumber) => {
@@ -250,12 +318,7 @@ async function syncPaymentsToWorkbook(payments: SettlementPayment[], previousSta
       return;
     }
 
-    const id = idColumn ? String(row.getCell(idColumn).value ?? '').trim() : '';
-    const settlementNo = settlementColumn ? String(row.getCell(settlementColumn).value ?? '').trim() : '';
-
-    if (id) {
-      rowsById.set(id, row);
-    }
+    const settlementNo = settlementNoColumn ? String(row.getCell(settlementNoColumn).value ?? '').trim() : '';
 
     if (settlementNo) {
       rowsBySettlementNo.set(settlementNo, row);
@@ -276,15 +339,25 @@ async function syncPaymentsToWorkbook(payments: SettlementPayment[], previousSta
 
     const signature = stringifyPaymentSignature(payment);
     const previousSignature = previousState.items[id];
-    const existingRow = rowsById.get(id) ?? (settlementNo ? rowsBySettlementNo.get(settlementNo) : undefined);
+    const existingRow = settlementNo ? rowsBySettlementNo.get(settlementNo) : undefined;
+    const approvalInfo = settlementNo ? approvalInfoBySettlementNo[settlementNo] : undefined;
 
-    if (previousSignature === signature) {
+    if (previousSignature === signature && !approvalInfo) {
       unchanged += 1;
       continue;
     }
 
+    if (previousSignature === signature && approvalInfo && existingRow) {
+      const nextValues = getSettlementApprovalRowValues(payment, approvalInfo);
+      nextValues.forEach((value, index) => {
+        existingRow.getCell(index + 1).value = value as ExcelJS.CellValue;
+      });
+      updated += 1;
+      continue;
+    }
+
     if (existingRow) {
-      const nextValues = getPaymentRowValues(payment);
+      const nextValues = getSettlementApprovalRowValues(payment, approvalInfo);
       nextValues.forEach((value, index) => {
         existingRow.getCell(index + 1).value = value as ExcelJS.CellValue;
       });
@@ -297,9 +370,9 @@ async function syncPaymentsToWorkbook(payments: SettlementPayment[], previousSta
       continue;
     }
 
-    worksheet.addRow(getPaymentRowValues(payment));
+    const nextValues = getSettlementApprovalRowValues(payment, approvalInfo);
+    worksheet.addRow(nextValues);
     const newRow = worksheet.lastRow!;
-    rowsById.set(id, newRow);
     if (settlementNo) {
       rowsBySettlementNo.set(settlementNo, newRow);
     }
@@ -359,6 +432,39 @@ async function runOnce() {
   logStep('api2', 'đã lưu API 2');
 
   const payments = iteratePaymentsFromLastToFirst(data.data ?? []);
+  const settlementNos = getUniqueSettlementNos(payments);
+  const api3Responses: Record<string, unknown> = {};
+
+  for (const settlementNo of settlementNos) {
+    const response = await client.getJson<unknown>(
+      '/Accounting/api/v1/en-US/AcctSettlementPayment/GetInfoApproveSettlementBySettlementNo',
+      {
+        auth: false,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      {
+        settlementNo,
+      },
+    );
+
+    api3Responses[settlementNo] = response;
+  }
+
+  await saveApi3Response(api3Responses);
+  logStep('api3', `đã lưu API 3 cho ${settlementNos.length} settlementNo`);
+
+  const approvalInfoBySettlementNo = Object.fromEntries(
+    Object.entries(api3Responses).map(([settlementNo, response]) => [
+      settlementNo,
+      (response as { data?: SettlementApprovalInfo; result?: SettlementApprovalInfo; approvalInfo?: SettlementApprovalInfo })?.data ??
+        (response as { data?: SettlementApprovalInfo; result?: SettlementApprovalInfo; approvalInfo?: SettlementApprovalInfo })?.result ??
+        (response as { data?: SettlementApprovalInfo; result?: SettlementApprovalInfo; approvalInfo?: SettlementApprovalInfo })?.approvalInfo ??
+        (response as SettlementApprovalInfo),
+    ]),
+  );
+
   const previousState = await loadApi2State();
 
   if (payments.length) {
@@ -375,7 +481,7 @@ async function runOnce() {
       );
     }
 
-    const result = await syncPaymentsToWorkbook(payments, previousState);
+    const result = await syncPaymentsToWorkbook(payments, approvalInfoBySettlementNo, previousState);
     logStep('workbook', `thêm ${result.added} dòng, cập nhật ${result.updated} dòng, giữ nguyên ${result.unchanged} dòng`);
 
     const stateItems = Object.fromEntries(
