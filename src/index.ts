@@ -208,9 +208,18 @@ function getWorksheetFieldByHeader(worksheet: ExcelJS.Worksheet, headerName: str
   return null;
 }
 
+function extractInvoiceOrStatementNo(note?: string | null) {
+  const text = String(note ?? '').trim();
+  const match = text.match(/\bHD\s*([0-9]+)\b/i);
+  return match?.[1] ?? '';
+}
+
 function getPaymentRowValues(payment: SettlementPayment) {
   const rowValues = new Array(22).fill('');
+  rowValues[7] = payment.payeeName ?? '';
   rowValues[8] = payment.settlementNo ?? '';
+  rowValues[9] = extractInvoiceOrStatementNo(payment.note as string | null | undefined);
+  rowValues[11] = payment.amount ?? '';
   return rowValues;
 }
 
