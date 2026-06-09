@@ -21,6 +21,7 @@ const dataDir = join(process.cwd(), 'data');
 const api1OutputPath = join(dataDir, 'api1-response.json');
 const api2OutputPath = join(dataDir, 'api2-response.json');
 const api3OutputPath = join(dataDir, 'api3-response.json');
+const api4OutputPath = join(dataDir, 'api4-response.json');
 const api2StatePath = join(dataDir, 'api2-state.json');
 const templateWorkbookPath = join(dataDir, 'Vendor_Payment_Template.xlsx');
 const outputWorkbookPath = join(dataDir, 'Vendor_Payment_Output.xlsx');
@@ -56,12 +57,22 @@ type Api3ResponseFile = {
   response: Record<string, unknown>;
 };
 
+type Api4ResponseFile = {
+  meta: {
+    lastRunAt: string;
+    settlementCount: number;
+    settlementIds: string[];
+  };
+  response: Record<string, unknown>;
+};
+
 type SettlementPayment = {
   id?: string;
   settlementNo?: string | null;
   payeeName?: string | null;
   requestDate?: string | null;
   dueDate?: string | null;
+  invoiceDate?: string | null;
   datetimeModified?: string | null;
   [key: string]: unknown;
 };
@@ -133,6 +144,51 @@ async function saveApi3Response(data: Record<string, unknown>) {
   };
 
   await writeFile(api3OutputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+async function saveApi4Response(data: Record<string, unknown>, settlementIds: string[]) {
+  await ensureDataDir();
+
+  const payload: Api4ResponseFile = {
+    meta: {
+      lastRunAt: new Date().toISOString(),
+      settlementCount: Object.keys(data).length,
+      settlementIds,
+    },
+    response: data,
+  };
+
+  await writeFile(api4OutputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+function extractChargeNoGrpSettlement(response: unknown) {
+  if (!response || typeof response !== 'object') {
+    return null;
+  }
+
+  const record = response as {
+    data?: { chargeNoGrpSettlement?: unknown };
+    result?: { chargeNoGrpSettlement?: unknown };
+    chargeNoGrpSettlement?: unknown;
+  };
+
+  const chargeNoGrpSettlement =
+    record.data?.chargeNoGrpSettlement ??
+    record.result?.chargeNoGrpSettlement ??
+    record.chargeNoGrpSettlement ??
+    [];
+
+  if (!Array.isArray(chargeNoGrpSettlement)) {
+    return chargeNoGrpSettlement;
+  }
+
+  const firstItem = chargeNoGrpSettlement[0] ?? null;
+
+  if (!firstItem || typeof firstItem !== 'object') {
+    return firstItem;
+  }
+
+  return firstItem;
 }
 
 function iteratePaymentsFromLastToFirst(payments: SettlementPayment[]): SettlementPayment[] {
@@ -263,11 +319,31 @@ function formatApprovalDate(value?: string | null) {
   }).format(date);
 }
 
+function formatInvoiceDate(value?: string | null) {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat('vi-VN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
 function getSettlementApprovalRowValues(
   payment: SettlementPayment,
   approvalInfo?: SettlementApprovalInfo,
+  invoiceDate?: string | null,
 ) {
   const rowValues = getPaymentRowValues(payment);
+  rowValues[10] = formatInvoiceDate(invoiceDate ?? payment.invoiceDate);
   rowValues[12] = formatApprovalDate(approvalInfo?.requesterAprDate);
   rowValues[13] = formatApprovalDate(approvalInfo?.managerAprDate);
   rowValues[14] = formatApprovalDate(approvalInfo?.accountantAprDate);
@@ -276,7 +352,7 @@ function getSettlementApprovalRowValues(
 
 function extractInvoiceOrStatementNo(note?: string | null) {
   const text = String(note ?? '').trim();
-  const match = text.match(/\bHD\s*([0-9]+)\b/i);
+  const match = text.match(/\b(?:HD|HĐ)\s*:?(?:\s*)([0-9]+(?:-[0-9]+)*)\b/i);
   return match?.[1] ?? '';
 }
 
@@ -292,6 +368,7 @@ function getPaymentRowValues(payment: SettlementPayment) {
 async function syncPaymentsToWorkbook(
   payments: SettlementPayment[],
   approvalInfoBySettlementNo: Record<string, SettlementApprovalInfo>,
+  invoiceDateBySettlementId: Record<string, string | null | undefined>,
   previousState: Api2StateFile,
 ): Promise<SyncResult> {
   await ensureDataDir();
@@ -341,6 +418,7 @@ async function syncPaymentsToWorkbook(
     const previousSignature = previousState.items[id];
     const existingRow = settlementNo ? rowsBySettlementNo.get(settlementNo) : undefined;
     const approvalInfo = settlementNo ? approvalInfoBySettlementNo[settlementNo] : undefined;
+    const invoiceDate = id ? invoiceDateBySettlementId[id] : undefined;
 
     if (previousSignature === signature && !approvalInfo) {
       unchanged += 1;
@@ -348,7 +426,7 @@ async function syncPaymentsToWorkbook(
     }
 
     if (previousSignature === signature && approvalInfo && existingRow) {
-      const nextValues = getSettlementApprovalRowValues(payment, approvalInfo);
+      const nextValues = getSettlementApprovalRowValues(payment, approvalInfo, invoiceDate);
       nextValues.forEach((value, index) => {
         existingRow.getCell(index + 1).value = value as ExcelJS.CellValue;
       });
@@ -357,7 +435,7 @@ async function syncPaymentsToWorkbook(
     }
 
     if (existingRow) {
-      const nextValues = getSettlementApprovalRowValues(payment, approvalInfo);
+      const nextValues = getSettlementApprovalRowValues(payment, approvalInfo, invoiceDate);
       nextValues.forEach((value, index) => {
         existingRow.getCell(index + 1).value = value as ExcelJS.CellValue;
       });
@@ -370,7 +448,7 @@ async function syncPaymentsToWorkbook(
       continue;
     }
 
-    const nextValues = getSettlementApprovalRowValues(payment, approvalInfo);
+    const nextValues = getSettlementApprovalRowValues(payment, approvalInfo, invoiceDate);
     worksheet.addRow(nextValues);
     const newRow = worksheet.lastRow!;
     if (settlementNo) {
@@ -455,6 +533,33 @@ async function runOnce() {
   await saveApi3Response(api3Responses);
   logStep('api3', `đã lưu API 3 cho ${settlementNos.length} settlementNo`);
 
+  const settlementIds = [...new Set(payments.map((payment) => getPaymentId(payment)).filter(Boolean))];
+  const api4Responses: Record<string, unknown> = {};
+  const invoiceDateBySettlementId: Record<string, string | null | undefined> = {};
+
+  for (const settlementId of settlementIds) {
+    const response = await client.getJson<unknown>(
+      '/Accounting/api/v1/en-US/AcctSettlementPayment/GetDetailSettlementPaymentById',
+      {
+        auth: false,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      {
+        settlementId,
+        view: 'LIST',
+      },
+    );
+
+    const chargeNoGrpSettlement = extractChargeNoGrpSettlement(response) as { invoiceDate?: string | null } | null;
+    api4Responses[settlementId] = chargeNoGrpSettlement;
+    invoiceDateBySettlementId[settlementId] = chargeNoGrpSettlement?.invoiceDate;
+  }
+
+  await saveApi4Response(api4Responses, settlementIds);
+  logStep('api4', `đã lưu API 4 cho ${settlementIds.length} settlementId`);
+
   const approvalInfoBySettlementNo = Object.fromEntries(
     Object.entries(api3Responses).map(([settlementNo, response]) => [
       settlementNo,
@@ -481,7 +586,12 @@ async function runOnce() {
       );
     }
 
-    const result = await syncPaymentsToWorkbook(payments, approvalInfoBySettlementNo, previousState);
+    const result = await syncPaymentsToWorkbook(
+      payments,
+      approvalInfoBySettlementNo,
+      invoiceDateBySettlementId,
+      previousState,
+    );
     logStep('workbook', `thêm ${result.added} dòng, cập nhật ${result.updated} dòng, giữ nguyên ${result.unchanged} dòng`);
 
     const stateItems = Object.fromEntries(
