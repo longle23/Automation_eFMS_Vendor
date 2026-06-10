@@ -69,6 +69,7 @@ type Api4ResponseFile = {
 type SettlementPayment = {
   id?: string;
   settlementNo?: string | null;
+  payeeAccountNo?: string | null;
   payeeName?: string | null;
   requestDate?: string | null;
   dueDate?: string | null;
@@ -356,12 +357,47 @@ function extractInvoiceOrStatementNo(note?: string | null) {
   return match?.[1] ?? '';
 }
 
+function extractVendorCode(payeeAccountNo?: string | null) {
+  const text = String(payeeAccountNo ?? '').trim();
+  const match = text.match(/^(VD\d+)(?:-|$)/i);
+  return match?.[1] ?? '';
+}
+
+function extractMst(payeeAccountNo?: string | null) {
+  const vendorCode = extractVendorCode(payeeAccountNo);
+  return vendorCode.replace(/^VD/i, '');
+}
+
+function formatAmount(value?: string | number | null) {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  const text = String(value).trim();
+  const numeric = Number(text.replace(/,/g, ''));
+
+  if (Number.isNaN(numeric)) {
+    return text;
+  }
+
+  return new Intl.NumberFormat('en-US').format(numeric);
+}
+
+function getServiceCode(note?: string | null) {
+  return String(note ?? '')
+    .trim()
+    .slice(0, 3);
+}
+
 function getPaymentRowValues(payment: SettlementPayment) {
   const rowValues = new Array(22).fill('');
+  rowValues[0] = extractMst(payment.payeeAccountNo as string | null | undefined);
+  rowValues[1] = extractVendorCode(payment.payeeAccountNo as string | null | undefined);
+  rowValues[6] = getServiceCode(payment.note as string | null | undefined);
   rowValues[7] = payment.payeeName ?? '';
   rowValues[8] = payment.settlementNo ?? '';
   rowValues[9] = extractInvoiceOrStatementNo(payment.note as string | null | undefined);
-  rowValues[11] = payment.amount ?? '';
+  rowValues[11] = formatAmount(payment.amount as string | number | null | undefined);
   return rowValues;
 }
 
