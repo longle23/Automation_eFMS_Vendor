@@ -1,46 +1,9 @@
 {
   "meta": {
-    "lastRunAt": "2026-06-10T10:13:05.290Z",
-    "settlementCount": 217
+    "lastRunAt": "2026-06-11T03:56:33.531Z",
+    "settlementCount": 216
   },
   "response": {
-    "KGN-PR-2603761": {
-      "requesterName": null,
-      "leaderName": null,
-      "managerName": null,
-      "accountantName": null,
-      "buHeadName": null,
-      "statusApproval": "New",
-      "numOfDeny": 0,
-      "isShowLeader": false,
-      "isShowManager": false,
-      "isShowAccountant": false,
-      "isShowBuHead": false,
-      "isValidAutoRate": false,
-      "id": "00000000-0000-0000-0000-000000000000",
-      "settlementNo": null,
-      "requester": null,
-      "requesterAprDate": null,
-      "leader": null,
-      "leaderApr": null,
-      "leaderAprDate": null,
-      "manager": null,
-      "managerApr": null,
-      "managerAprDate": null,
-      "accountant": null,
-      "accountantApr": null,
-      "accountantAprDate": null,
-      "buhead": null,
-      "buheadApr": null,
-      "buheadAprDate": null,
-      "userCreated": null,
-      "dateCreated": null,
-      "userModified": null,
-      "dateModified": null,
-      "comment": null,
-      "isDeny": null,
-      "levelApprove": null
-    },
     "KGN-PR-26030030": {
       "requesterName": "Julie Thuy",
       "leaderName": "Trần Việt Hưng",

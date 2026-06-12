@@ -196,6 +196,37 @@ function iteratePaymentsFromLastToFirst(payments: SettlementPayment[]): Settleme
   return [...payments].reverse();
 }
 
+function getRequesterAprDateValue(value?: string | null) {
+  if (!value) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return date.getTime();
+}
+
+function sortPaymentsByRequesterAprDate(
+  payments: SettlementPayment[],
+  approvalInfoBySettlementNo: Record<string, SettlementApprovalInfo>,
+) {
+  return [...payments].sort((a, b) => {
+    const aSettlementNo = getPaymentSettlementNo(a);
+    const bSettlementNo = getPaymentSettlementNo(b);
+    const aRequesterAprDate = getRequesterAprDateValue(approvalInfoBySettlementNo[aSettlementNo]?.requesterAprDate);
+    const bRequesterAprDate = getRequesterAprDateValue(approvalInfoBySettlementNo[bSettlementNo]?.requesterAprDate);
+
+    if (aRequesterAprDate !== bRequesterAprDate) {
+      return aRequesterAprDate - bRequesterAprDate;
+    }
+
+    return aSettlementNo.localeCompare(bSettlementNo);
+  });
+}
+
 function stringifyPaymentSignature(payment: SettlementPayment) {
   const normalized = Object.fromEntries(
     Object.entries(payment)
@@ -622,8 +653,10 @@ async function runOnce() {
       );
     }
 
+    const sortedPayments = sortPaymentsByRequesterAprDate(payments, approvalInfoBySettlementNo);
+
     const result = await syncPaymentsToWorkbook(
-      payments,
+      sortedPayments,
       approvalInfoBySettlementNo,
       invoiceDateBySettlementId,
       previousState,
