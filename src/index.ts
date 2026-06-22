@@ -407,7 +407,6 @@ function normalizeApi10Payments(response: unknown) {
     payeeName: payment.payeeName,
     payeeAccountNo: payment.payeeAccountNo,
     settlementNo: payment.settlementNo,
-    note: payment.note,
     invoiceDate: payment.invoiceDate ?? null,
     invoiceNo: payment.invoiceNo ?? null,
   }));
@@ -423,7 +422,6 @@ function enrichPaymentsWithDetails(
       ...payment,
       invoiceDate: payment.invoiceDate ?? (detail?.invoiceDate as string | null | undefined) ?? null,
       invoiceNo: payment.invoiceNo ?? (detail?.invoiceNo as string | null | undefined) ?? null,
-      note: payment.note ?? (detail?.notes as string | null | undefined) ?? null,
     };
   });
 }
@@ -726,12 +724,11 @@ function buildColumnMapping(payment: SettlementPayment, groupEfms: string, invoi
     'NGÀY DUYỆT - HOD': formatApprovalDate(approvalInfo?.managerAprDate),
     'NGÀY KẾ TOÁN ĐÃ KIỂM TRA': formatApprovalDate(approvalInfo?.accountantAprDate),
     'GROUP EFMS': groupEfms,
-    'GHI CHÚ (NẾU BỊ THIẾU CHỨNG)': payment.note ?? '',
   };
 }
 
 function getPaymentRowValues(payment: SettlementPayment, groupEfms: string) {
-  const rowValues = new Array(22).fill('');
+  const rowValues = new Array(23).fill('');
   rowValues[0] = extractMst(payment.payeeAccountNo as string | null | undefined);
   rowValues[1] = extractVendorCode(payment.payeeAccountNo as string | null | undefined);
   rowValues[6] = getServiceCode(payment.note as string | null | undefined);
@@ -866,6 +863,13 @@ function normalizeApiPayments(response: unknown) {
   return Array.isArray(payments) ? (payments as SettlementPayment[]) : [];
 }
 
+function removeNoteField(payments: SettlementPayment[]) {
+  return payments.map((payment) => {
+    const { note, ...rest } = payment as Record<string, unknown>;
+    return rest as SettlementPayment;
+  });
+}
+
 function shouldUseApi6StateCheck(payment: SettlementPayment) {
   return Boolean(getPaymentId(payment));
 }
@@ -899,7 +903,26 @@ async function runOnce() {
   await saveApi2Response(data);
   logStep('api2', 'đã lưu API 2');
 
-  const payments = iteratePaymentsFromLastToFirst(data.data ?? []);
+  const api2Payments = removeNoteField(normalizeApiPayments(data));
+  const api2StateItems = Object.fromEntries(
+    api2Payments
+      .map((payment) => {
+        const id = getPaymentId(payment);
+        return id ? [id, stringifyPaymentSignature(payment)] : null;
+      })
+      .filter((entry): entry is [string, string] => entry !== null),
+  );
+
+  await saveApiState(api2StatePath, {
+    meta: {
+      lastRunAt: new Date().toISOString(),
+      itemCount: Object.keys(api2StateItems).length,
+    },
+    items: api2StateItems,
+  });
+  logStep('api2-state', `đã lưu state cho ${Object.keys(api2StateItems).length} bản ghi`);
+
+  const payments = removeNoteField(iteratePaymentsFromLastToFirst(api2Payments));
   const settlementNos = getUniqueSettlementNos(payments);
   const api3Responses: Record<string, unknown> = {};
 
@@ -983,7 +1006,7 @@ async function runOnce() {
   logStep('api6', `đã call và lưu response API 6 (HTTP ${api6RawResponse.status})`);
 
   const api6Parsed = JSON.parse(api6Text) as unknown;
-  const api6Payments = normalizeApiPayments(api6Parsed);
+  const api6Payments = removeNoteField(normalizeApiPayments(api6Parsed));
   const api6SettlementNos = getUniqueSettlementNos(api6Payments);
   const api6PaymentsWithState = api6Payments.filter(shouldUseApi6StateCheck);
   const api6StateItems = Object.fromEntries(
@@ -1069,27 +1092,15 @@ async function runOnce() {
   const previousState = await loadApiState(api2StatePath);
 
   if (api6PaymentsForWorkbook.length) {
-    let createdWorkbookFromTemplate = false;
-
-    if (config.oneDrive) {
-      const workbook = await prepareWorkbookFromOneDrive(config.oneDrive);
-      createdWorkbookFromTemplate = workbook.createdFromTemplate;
-      logStep(
-        'onedrive',
-        createdWorkbookFromTemplate
-          ? 'không tìm thấy workbook, đã tạo mới từ template'
-          : 'đã tải workbook hiện tại',
-      );
-    }
-
     const sortedPayments = sortPaymentsByRequesterAprDate(api6PaymentsForWorkbook, approvalInfoBySettlementNo);
-
     const groupEfms = api6Payments.length > 0 ? 'STL_TKI' : 'OPS_MANAGEMENT';
+
+    const previousApi2State = previousState;
     const result = await syncPaymentsToWorkbook(
       sortedPayments,
       approvalInfoBySettlementNo,
       invoiceDateBySettlementId,
-      previousState,
+      previousApi2State,
       groupEfms,
     );
     logStep('workbook', `thêm ${result.added} dòng, cập nhật ${result.updated} dòng, giữ nguyên ${result.unchanged} dòng`);
@@ -1105,14 +1116,6 @@ async function runOnce() {
 
     const api2ChangedCount = Object.entries(stateItems).filter(([id, signature]) => previousState.items[id] !== signature).length;
 
-    await saveApiState(api2StatePath, {
-      meta: {
-        lastRunAt: new Date().toISOString(),
-        itemCount: Object.keys(stateItems).length,
-      },
-      items: stateItems,
-    });
-
     await saveApiState(api6StatePath, {
       meta: {
         lastRunAt: new Date().toISOString(),
@@ -1121,22 +1124,6 @@ async function runOnce() {
       items: stateItems,
     });
     logStep('state', `API 2 thay đổi ${api2ChangedCount} bản ghi, API 6 thay đổi ${api6ChangedCount} bản ghi`);
-
-    if (config.oneDrive && (result.added || result.updated)) {
-      if (createdWorkbookFromTemplate) {
-        const uploadedFile = await uploadFileToOneDrivePath(outputWorkbookPath, config.oneDrive, remoteWorkbookName);
-
-        if (!uploadedFile.id) {
-          throw new Error('OneDrive path upload did not return a new file id');
-        }
-
-        await updateEnvValue('ONEDRIVE_FILE_ID', uploadedFile.id);
-        logStep('onedrive', `đã cập nhật ONEDRIVE_FILE_ID=${uploadedFile.id}`);
-      } else {
-        await uploadFileToOneDrive(outputWorkbookPath, config.oneDrive);
-      }
-      logStep('onedrive', 'đã cập nhật workbook');
-    }
   } else {
     logStep('workbook', 'không có dòng mới');
   }
@@ -1174,7 +1161,7 @@ async function runOnce() {
 
   const previousApi10State = await loadApiState(api10StatePath);
   const api10Parsed = JSON.parse(api10Text) as unknown;
-  const api10Payments = normalizeApi10Payments(api10Parsed);
+  const api10Payments = removeNoteField(normalizeApi10Payments(api10Parsed));
   const api10StateItems = Object.fromEntries(
     api10Payments
       .map((payment) => {
@@ -1188,16 +1175,38 @@ async function runOnce() {
     ([id, signature]) => previousApi10State.items[id] !== signature,
   ).length;
 
-  await saveApiState(api10StatePath, {
-    meta: {
-      lastRunAt: new Date().toISOString(),
-      itemCount: Object.keys(api10StateItems).length,
-    },
-    items: api10StateItems,
-  });
-
   const api10SettlementIds = [...new Set(api10Payments.map((payment) => getPaymentId(payment)).filter(Boolean))];
   const api10SettlementNos = getUniqueSettlementNos(api10Payments);
+
+  const api11Responses: Record<string, unknown> = {};
+  if (api10SettlementNos.length) {
+    logStep('api11', 'bắt đầu gọi API 11');
+
+    for (const settlementNo of api10SettlementNos) {
+      try {
+        const response = await client.getJson<unknown>(
+          '/Accounting/api/v1/en-US/AcctSettlementPayment/GetInfoApproveSettlementBySettlementNo',
+          {
+            auth: false,
+            headers: {
+              Authorization: `Bearer ${api9AccessToken}`,
+            },
+          },
+          {
+            settlementNo,
+          },
+        );
+
+        api11Responses[settlementNo] = response;
+      } catch (error) {
+        logStep('api11', `lỗi khi gọi API 11 cho settlementNo ${settlementNo}: ${error}`);
+        api11Responses[settlementNo] = { error: String(error) };
+      }
+    }
+
+    await saveApi11Response(api11Responses, api10SettlementNos);
+    logStep('api11', `đã lưu API 11 cho ${api10SettlementNos.length} settlementNo từ API 10`);
+  }
 
   const api12Responses: Record<string, unknown> = {};
   if (api10SettlementIds.length) {
@@ -1232,36 +1241,6 @@ async function runOnce() {
     logStep('api12', `đã lưu API 12 cho ${api10SettlementIds.length} settlementId từ API 10`);
   }
 
-  const api11Responses: Record<string, unknown> = {};
-  if (api10SettlementNos.length) {
-    logStep('api11', 'bắt đầu gọi API 11');
-
-    for (const settlementNo of api10SettlementNos) {
-      try {
-        const response = await client.getJson<unknown>(
-          '/Accounting/api/v1/en-US/AcctSettlementPayment/GetInfoApproveSettlementBySettlementNo',
-          {
-            auth: false,
-            headers: {
-              Authorization: `Bearer ${api9AccessToken}`,
-            },
-          },
-          {
-            settlementNo,
-          },
-        );
-
-        api11Responses[settlementNo] = response;
-      } catch (error) {
-        logStep('api11', `lỗi khi gọi API 11 cho settlementNo ${settlementNo}: ${error}`);
-        api11Responses[settlementNo] = { error: String(error) };
-      }
-    }
-
-    await saveApi11Response(api11Responses, api10SettlementNos);
-    logStep('api11', `đã lưu API 11 cho ${api10SettlementNos.length} settlementNo từ API 10`);
-  }
-
   const api10ApprovalInfoBySettlementNo = Object.fromEntries(
     Object.entries(api11Responses).map(([settlementNo, response]) => [
       settlementNo,
@@ -1277,9 +1256,9 @@ async function runOnce() {
     ...api10ApprovalInfoBySettlementNo,
   };
 
-  const api10PaymentsForWorkbook = api10Payments.length ? enrichPaymentsWithDetails(api10Payments, api12Responses) : payments;
+  const api10PaymentsForWorkbook = api10Payments.length ? removeNoteField(enrichPaymentsWithDetails(api10Payments, api12Responses)) : payments;
   if (api10PaymentsForWorkbook.length) {
-    const previousApi10WorkbookState = await loadApiState(api2StatePath);
+    const previousApi10WorkbookState = await loadApiState(api10StatePath);
     const sortedApi10Payments = sortPaymentsByRequesterAprDate(api10PaymentsForWorkbook, mergedApprovalInfoBySettlementNo);
     const resultApi10 = await syncPaymentsToWorkbook(
       sortedApi10Payments,
@@ -1288,6 +1267,7 @@ async function runOnce() {
       previousApi10WorkbookState,
       'STL_TKI',
     );
+    logStep('workbook', `API 10 dùng state từ ${Object.keys(previousApi10WorkbookState.items).length} bản ghi trước đó`);
 
     const api10WorkbookStateItems = Object.fromEntries(
       api10PaymentsForWorkbook
@@ -1298,7 +1278,7 @@ async function runOnce() {
         .filter((entry): entry is [string, string] => entry !== null),
     );
 
-    await saveApiState(api2StatePath, {
+    await saveApiState(api10StatePath, {
       meta: {
         lastRunAt: new Date().toISOString(),
         itemCount: Object.keys(api10WorkbookStateItems).length,
@@ -1307,7 +1287,32 @@ async function runOnce() {
     });
 
     logStep('api10-workbook', `thêm ${resultApi10.added} dòng, cập nhật ${resultApi10.updated} dòng, giữ nguyên ${resultApi10.unchanged} dòng`);
-    logStep('api10-state', `đã lưu state cho ${Object.keys(api10StateItems).length} bản ghi, thay đổi ${api10ChangedCount} bản ghi`);
+    logStep('api10-state', `đã lưu state cho ${Object.keys(api10WorkbookStateItems).length} bản ghi, thay đổi ${api10ChangedCount} bản ghi`);
+  }
+
+  if (config.oneDrive && (api6PaymentsForWorkbook.length || api10PaymentsForWorkbook.length)) {
+    let createdWorkbookFromTemplate = false;
+
+    const workbook = await prepareWorkbookFromOneDrive(config.oneDrive);
+    createdWorkbookFromTemplate = workbook.createdFromTemplate;
+    logStep(
+      'onedrive',
+      createdWorkbookFromTemplate
+        ? 'không tìm thấy workbook, đã tạo mới từ template'
+        : 'đã tải workbook hiện tại',
+    );
+
+    if (createdWorkbookFromTemplate) {
+      const uploadedFile = await uploadFileToOneDrivePath(outputWorkbookPath, config.oneDrive, remoteWorkbookName);
+      if (!uploadedFile.id) {
+        throw new Error('OneDrive path upload did not return a new file id');
+      }
+      await updateEnvValue('ONEDRIVE_FILE_ID', uploadedFile.id);
+      logStep('onedrive', `đã cập nhật ONEDRIVE_FILE_ID=${uploadedFile.id}`);
+    } else {
+      await uploadFileToOneDrive(outputWorkbookPath, config.oneDrive);
+    }
+    logStep('onedrive', 'đã cập nhật workbook');
   }
 
   logStep('request', 'hoàn tất');
