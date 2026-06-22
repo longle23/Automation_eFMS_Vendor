@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "lastRunAt": "2026-06-19T07:05:53.064Z",
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store, no-cache, max-age=0",
+      "content-encoding": "gzip",
+      "content-type": "application/json; charset=UTF-8",
+      "date": "Fri, 19 Jun 2026 07:05:52 GMT",
+      "pragma": "no-cache",
+      "server": "Kestrel",
+      "strict-transport-security": "max-age=15768000",
+      "transfer-encoding": "chunked",
+      "vary": "Accept-Encoding",
+      "x-powered-by": "ASP.NET"
+    }
+  },
+  "response": {
+    "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjhFMTI2MzEwN0VDMUE2RkUxQkIxMjZEREM5QzM5MDVGNkQ4MkIyNjQiLCJ0eXAiOiJKV1QiLCJ4NXQiOiJqaEpqRUg3QnB2NGJzU2JkeWNPUVgyMkNzbVEifQ.eyJuYmYiOjE3ODE4NTI3NTMsImV4cCI6MTc4MTg4NTE1MywiaXNzIjoiaHR0cHM6Ly9lZm1zLWFwaS5zb3RyYW5zLmNvbS52bi9pZGVudGl0eXNlcnZlciIsImF1ZCI6WyJodHRwczovL2VmbXMtYXBpLnNvdHJhbnMuY29tLnZuL2lkZW50aXR5c2VydmVyL3Jlc291cmNlcyIsImVmbXNfYXBpIl0sImNsaWVudF9pZCI6ImVGTVMiLCJzdWIiOiI2MDZiNzM4NC0yNTg5LTQzZjMtYTRkNy05NWE5NGFjMDI2ZjQiLCJhdXRoX3RpbWUiOjE3ODE4NTI3NTMsImlkcCI6ImxvY2FsIiwiaWQiOiI2MDZiNzM4NC0yNTg5LTQzZjMtYTRkNy05NWE5NGFjMDI2ZjQiLCJlbWFpbCI6InRyYW5zcG9ydC5kYXRhMUBzb3RyYW5zLmNvbS52biIsInByZWZlcnJlZF91c2VybmFtZSI6InRyYW5zcG9ydC5kYXRhMSIsInBob25lX251bWJlciI6IiIsInVzZXJOYW1lIjoidHJhbnNwb3J0LmRhdGExIiwiZW1wbG95ZWVJZCI6IjdmOTQ5YjVkLWE2NTgtNDI1Mi1iNTg3LWY5ZTExMzI5MjEyNSIsInBob3RvIjoiIiwibmFtZUVuIjoiSnVsaWUgVGh1eSIsIm5hbWVWbiI6Ikp1bGllIFRodXkiLCJ0aXRsZSI6IiIsImVtcGxveWVlQ29kZSI6IkRBVEExIiwiYmFua0FjY291bnRObyI6IiIsImJhbmtOYW1lIjoiIiwiYmFua09mZmljZUFjY291bnROb1ZuZCI6IjMwMDI3MTY4NjggKFZORCkiLCJiYW5rT2ZmaWNlQWNjb3VudE5vVXNkIjoiMTQwNzIxNjY2NiAoVVNEKS0gMTUwOTEwMTQwMTU2ODI1IChFVVIpIiwiYmFua0NvZGUiOiIiLCJrYkV4Y2hhbmdlUmF0ZSI6IjIwMDAwLjAwMCIsImludGVybmFsQ29kZSI6IkhDTSIsImNvbXBhbnlDb2RlIjoiU1RMIiwib2ZmaWNlQ29kZSI6IlNUTC1IQ00iLCJTaWduYXR1cmVJbWFnZSI6IiIsInVzZXJUeXBlIjoiTm9ybWFsIFVzZXIiLCJvZmZpY2VUeXBlIjoiSGVhZCIsInVzZXJSb2xlIjoiQ1MiLCJtaW5NYXJnaW5Xb3JrT3JkZXIiOiI4IiwiY29tcGFueUlkIjoiNzkyMTQ0M2EtNTQ0OS00ODA0LThmMzQtZTkzMDkxYjRlZmIyIiwib2ZmaWNlSWQiOiJhMWMyNzUyNS1iZTk2LTQ4ZjQtOTFhZi02YWM3ZGI2ZjZmOTIiLCJkZXBhcnRtZW50SWQiOiI5OCIsImdyb3VwSWQiOiIxMSIsInNjb3BlIjpbIm9wZW5pZCIsInByb2ZpbGUiLCJlZm1zX2FwaSIsIm9mZmxpbmVfYWNjZXNzIl0sImFtciI6WyJjdXN0b20iXX0.SmbQ7t1Iw1YDe7DEmzoNW62BBW4fSTs1sWa3sdfG71TJKJIW_aQR0A89TvdYH0A5SIYwWbyXE_dZj2rgqXQYmh7_1rbmhoCR4Sk_7e4q-NmPHzadbEDR9-xRzX1AtII83Tj35-4fDqFKwp-sDK9FutixQ-MYt3W23t3TThPyo64nTT-p_H7RATwX6IaBCLtMd8PVfpM6Jm4q-TFIY89HT4gryQg_2GhKQ1XGfKKR_Id9iEBqYFcgeCQtzFDiUdGXJUoonhfdyvvihLV1EZYFSMOj-gga8t7GvODsYB_x3sYZef_UO3M5fFi-H-JyoHC7hri8_Ok6bjeVKb-wPCQQBQ",
+    "expires_in": 32400,
+    "token_type": "Bearer",
+    "refresh_token": "1d84fd537a65ead8c9a4f7785c6591b97ae944e257b645159eaf9eb4b31630b7"
+  }
+}

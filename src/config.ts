@@ -12,6 +12,7 @@ export interface AppConfig {
   companyId?: string;
   authorization?: string;
   headers: Record<string, string>;
+  api5Headers: Record<string, string>;
   timeoutMs: number;
   settlementPaymentUrl: string;
   settlementPaymentRequester: string;
@@ -74,6 +75,7 @@ export function loadConfig(): AppConfig {
       (oneDriveValues.userId || oneDriveValues.userPrincipalName || oneDriveValues.driveId),
   );
   const extraHeaders: Record<string, string> = {};
+  const api5Headers: Record<string, string> = {};
 
   if (companyId) {
     extraHeaders.companyId = companyId;
@@ -110,6 +112,7 @@ export function loadConfig(): AppConfig {
     companyId: companyId || undefined,
     authorization: authHeader || undefined,
     headers: extraHeaders,
+    api5Headers,
     timeoutMs,
     settlementPaymentUrl,
     settlementPaymentRequester,
