@@ -155,6 +155,7 @@ type SettlementPayment = {
   settlementNo?: string | null;
   payeeAccountNo?: string | null;
   payeeName?: string | null;
+  departmentName?: string | null;
   requestDate?: string | null;
   dueDate?: string | null;
   invoiceDate?: string | null;
@@ -473,13 +474,19 @@ function getRequesterAprDateValue(value?: string | null) {
   return date.getTime();
 }
 
-function sortPaymentsByRequesterAprDate(
+function sortPaymentsBySettlementNoAndRequesterAprDate(
   payments: SettlementPayment[],
   approvalInfoBySettlementNo: Record<string, SettlementApprovalInfo>,
 ) {
   return [...payments].sort((a, b) => {
     const aSettlementNo = getPaymentSettlementNo(a);
     const bSettlementNo = getPaymentSettlementNo(b);
+
+    const settlementNoCompare = aSettlementNo.localeCompare(bSettlementNo);
+    if (settlementNoCompare !== 0) {
+      return settlementNoCompare;
+    }
+
     const aRequesterAprDate = getRequesterAprDateValue(approvalInfoBySettlementNo[aSettlementNo]?.requesterAprDate);
     const bRequesterAprDate = getRequesterAprDateValue(approvalInfoBySettlementNo[bSettlementNo]?.requesterAprDate);
 
@@ -487,7 +494,7 @@ function sortPaymentsByRequesterAprDate(
       return aRequesterAprDate - bRequesterAprDate;
     }
 
-    return aSettlementNo.localeCompare(bSettlementNo);
+    return stringifyPaymentSignature(a).localeCompare(stringifyPaymentSignature(b));
   });
 }
 
@@ -637,9 +644,8 @@ function getSettlementApprovalRowValues(
   payment: SettlementPayment,
   approvalInfo?: SettlementApprovalInfo,
   invoiceDate?: string | null,
-  groupEfms = '',
 ) {
-  const rowValues = getPaymentRowValues(payment, groupEfms);
+  const rowValues = getPaymentRowValues(payment);
   rowValues[10] = formatInvoiceDate(invoiceDate ?? payment.invoiceDate);
   rowValues[12] = formatApprovalDate(approvalInfo?.requesterAprDate);
   rowValues[13] = formatApprovalDate(approvalInfo?.managerAprDate);
@@ -647,20 +653,41 @@ function getSettlementApprovalRowValues(
   return rowValues;
 }
 
-function setPaymentRowValuesByColumnHeaders(
+type WorkbookColumnSpec = {
+  key: string;
+  index: number;
+  value: (payment: SettlementPayment, invoiceDate?: string | null, approvalInfo?: SettlementApprovalInfo) => ExcelJS.CellValue;
+};
+
+const WORKBOOK_COLUMN_SPECS: WorkbookColumnSpec[] = [
+  { key: 'mst', index: 1, value: (payment) => extractMst(payment.payeeAccountNo as string | null | undefined) },
+  { key: 'vendorCode', index: 2, value: (payment) => extractVendorCode(payment.payeeAccountNo as string | null | undefined) },
+  { key: 'service', index: 7, value: (payment) => getServiceCode(payment.note as string | null | undefined) },
+  { key: 'vendorName', index: 8, value: (payment) => payment.payeeName ?? '' },
+  { key: 'settlementNo', index: 9, value: (payment) => payment.settlementNo ?? '' },
+  {
+    key: 'invoiceOrStatementNo',
+    index: 10,
+    value: (payment) => extractInvoiceOrStatementNo(payment.note as string | null | undefined, payment.invoiceNo as string | null | undefined),
+  },
+  { key: 'invoiceDate', index: 11, value: (payment, invoiceDate) => formatInvoiceDate(invoiceDate ?? payment.invoiceDate) },
+  { key: 'amount', index: 12, value: (payment) => formatAmount(payment.amount as string | number | null | undefined) },
+  { key: 'departmentName', index: 16, value: (payment) => getDepartmentName(payment) },
+  { key: 'requesterApprovedAt', index: 13, value: (_payment, _invoiceDate, approvalInfo) => formatApprovalDate(approvalInfo?.requesterAprDate) },
+  { key: 'managerApprovedAt', index: 14, value: (_payment, _invoiceDate, approvalInfo) => formatApprovalDate(approvalInfo?.managerAprDate) },
+  { key: 'accountantApprovedAt', index: 15, value: (_payment, _invoiceDate, approvalInfo) => formatApprovalDate(approvalInfo?.accountantAprDate) },
+];
+
+function setPaymentRowValuesFromTemplate(
   row: ExcelJS.Row,
   payment: SettlementPayment,
-  columnHeaders: Map<string, number>,
-  groupEfms: string,
   invoiceDate?: string | null,
   approvalInfo?: SettlementApprovalInfo,
 ) {
-  const mapping = buildColumnMapping(payment, groupEfms, invoiceDate, approvalInfo);
-  
-  for (const [headerName, value] of Object.entries(mapping)) {
-    const colNum = columnHeaders.get(headerName);
-    if (colNum !== undefined && value !== undefined) {
-      row.getCell(colNum).value = value as ExcelJS.CellValue;
+  for (const spec of WORKBOOK_COLUMN_SPECS) {
+    const value = spec.value(payment, invoiceDate, approvalInfo);
+    if (value !== undefined) {
+      row.getCell(spec.index).value = value;
     }
   }
 }
@@ -687,6 +714,10 @@ function extractMst(payeeAccountNo?: string | null) {
   return vendorCode.replace(/^VD/i, '');
 }
 
+function getDepartmentName(payment: SettlementPayment) {
+  return String(payment.departmentName ?? '').trim();
+}
+
 function formatAmount(value?: string | number | null) {
   if (value === null || value === undefined || value === '') {
     return '';
@@ -708,26 +739,7 @@ function getServiceCode(note?: string | null) {
     .slice(0, 3);
 }
 
-type ColumnMapping = Record<string, string | number | undefined>;
-
-function buildColumnMapping(payment: SettlementPayment, groupEfms: string, invoiceDate?: string | null, approvalInfo?: SettlementApprovalInfo): ColumnMapping {
-  return {
-    'MST': extractMst(payment.payeeAccountNo as string | null | undefined),
-    'VENDOR CODE': extractVendorCode(payment.payeeAccountNo as string | null | undefined),
-    'DỊCH VỤ': getServiceCode(payment.note as string | null | undefined),
-    'NCC': payment.payeeName ?? '',
-    'SỐ ĐNTT-FMS': payment.settlementNo ?? '',
-    'SỐ HOÁ ĐƠN/BANG KÊ': extractInvoiceOrStatementNo(payment.note as string | null | undefined, payment.invoiceNo as string | null | undefined),
-    'NGÀY HOÁ ĐƠN': formatInvoiceDate(invoiceDate ?? payment.invoiceDate),
-    'SỐ TIỀN99': formatAmount(payment.amount as string | number | null | undefined),
-    'NGÀY LẬP - FMS': formatApprovalDate(approvalInfo?.requesterAprDate),
-    'NGÀY DUYỆT - HOD': formatApprovalDate(approvalInfo?.managerAprDate),
-    'NGÀY KẾ TOÁN ĐÃ KIỂM TRA': formatApprovalDate(approvalInfo?.accountantAprDate),
-    'GROUP EFMS': groupEfms,
-  };
-}
-
-function getPaymentRowValues(payment: SettlementPayment, groupEfms: string) {
+function getPaymentRowValues(payment: SettlementPayment) {
   const rowValues = new Array(23).fill('');
   rowValues[0] = extractMst(payment.payeeAccountNo as string | null | undefined);
   rowValues[1] = extractVendorCode(payment.payeeAccountNo as string | null | undefined);
@@ -736,22 +748,33 @@ function getPaymentRowValues(payment: SettlementPayment, groupEfms: string) {
   rowValues[8] = payment.settlementNo ?? '';
   rowValues[9] = extractInvoiceOrStatementNo(payment.note as string | null | undefined, payment.invoiceNo as string | null | undefined);
   rowValues[11] = formatAmount(payment.amount as string | number | null | undefined);
-  rowValues[15] = groupEfms;
+  rowValues[15] = getDepartmentName(payment);
   return rowValues;
 }
 
 function buildColumnHeadersMap(worksheet: ExcelJS.Worksheet): Map<string, number> {
   const headerRow = worksheet.getRow(1);
   const headers = new Map<string, number>();
-  
+
   for (let column = 1; column <= worksheet.columnCount; column += 1) {
     const value = String(headerRow.getCell(column).value ?? '').trim();
     if (value) {
       headers.set(value, column);
     }
   }
-  
+
   return headers;
+}
+
+function findColumnByKeywords(headers: Map<string, number>, keywords: string[]) {
+  for (const [headerName, column] of headers.entries()) {
+    const normalized = headerName.toLowerCase();
+    if (keywords.every((keyword) => normalized.includes(keyword.toLowerCase()))) {
+      return column;
+    }
+  }
+
+  return null;
 }
 
 async function syncPaymentsToWorkbook(
@@ -759,7 +782,6 @@ async function syncPaymentsToWorkbook(
   approvalInfoBySettlementNo: Record<string, SettlementApprovalInfo>,
   invoiceDateBySettlementId: Record<string, string | null | undefined>,
   previousState: ApiStateFile,
-  groupEfms: string,
 ): Promise<SyncResult> {
   await ensureDataDir();
   await ensureWorkbookExists();
@@ -777,22 +799,9 @@ async function syncPaymentsToWorkbook(
   }
 
   const columnHeaders = buildColumnHeadersMap(worksheet);
-  const settlementNoColumn = columnHeaders.get('SỐ ĐNTT-FMS');
+  const settlementNoColumn = findColumnByKeywords(columnHeaders, ['đntt', 'fms']) ?? findColumnByKeywords(columnHeaders, ['settlement', 'no']);
 
-  const rowsBySettlementNo = new Map<string, ExcelJS.Row>();
-
-  worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) {
-      return;
-    }
-
-    const settlementNo = settlementNoColumn ? String(row.getCell(settlementNoColumn).value ?? '').trim() : '';
-
-    if (settlementNo) {
-      rowsBySettlementNo.set(settlementNo, row);
-    }
-  });
-
+  const rowsToWrite: Array<{ payment: SettlementPayment; invoiceDate?: string | null; approvalInfo?: SettlementApprovalInfo }> = [];
   let added = 0;
   let updated = 0;
   let unchanged = 0;
@@ -807,32 +816,40 @@ async function syncPaymentsToWorkbook(
 
     const signature = stringifyPaymentSignature(payment);
     const previousSignature = previousState.items[id];
-    const existingRow = settlementNo ? rowsBySettlementNo.get(settlementNo) : undefined;
     const approvalInfo = settlementNo ? approvalInfoBySettlementNo[settlementNo] : undefined;
-    const invoiceDate = id ? invoiceDateBySettlementId[id] : undefined;
+    const invoiceDate = invoiceDateBySettlementId[id];
 
-    if (existingRow) {
-      if (previousSignature === signature && !approvalInfo) {
-        unchanged += 1;
-        continue;
-      }
-
-      setPaymentRowValuesByColumnHeaders(existingRow, payment, columnHeaders, groupEfms, invoiceDate, approvalInfo);
-      updated += 1;
+    if (previousSignature === signature && !approvalInfo) {
+      unchanged += 1;
       continue;
     }
 
-    const newRow = worksheet.addRow([]);
-    setPaymentRowValuesByColumnHeaders(newRow, payment, columnHeaders, groupEfms, invoiceDate, approvalInfo);
-    if (settlementNo) {
-      rowsBySettlementNo.set(settlementNo, newRow);
-    }
+    rowsToWrite.push({ payment, invoiceDate, approvalInfo });
     added += 1;
   }
 
-  if (added || updated) {
-    await workbook.xlsx.writeFile(outputWorkbookPath);
+  if (!rowsToWrite.length) {
+    return { added: 0, updated, unchanged };
   }
+
+  const sortedRowsToWrite = settlementNoColumn
+    ? [...rowsToWrite].sort((a, b) => {
+        const aSettlementNo = getPaymentSettlementNo(a.payment);
+        const bSettlementNo = getPaymentSettlementNo(b.payment);
+        return aSettlementNo.localeCompare(bSettlementNo);
+      })
+    : rowsToWrite;
+
+  if (worksheet.rowCount > 1) {
+    worksheet.spliceRows(2, Math.max(worksheet.rowCount - 1, 0));
+  }
+
+  for (const { payment, invoiceDate, approvalInfo } of sortedRowsToWrite) {
+    const newRow = worksheet.addRow([]);
+    setPaymentRowValuesFromTemplate(newRow, payment, invoiceDate, approvalInfo);
+  }
+
+  await workbook.xlsx.writeFile(outputWorkbookPath);
 
   return { added, updated, unchanged };
 }
@@ -868,6 +885,22 @@ function removeNoteField(payments: SettlementPayment[]) {
     const { note, ...rest } = payment as Record<string, unknown>;
     return rest as SettlementPayment;
   });
+}
+
+function mergePaymentsById(...paymentGroups: SettlementPayment[][]) {
+  const merged = new Map<string, SettlementPayment>();
+
+  for (const group of paymentGroups) {
+    for (const payment of group) {
+      const id = getPaymentId(payment);
+      if (!id) {
+        continue;
+      }
+      merged.set(id, payment);
+    }
+  }
+
+  return [...merged.values()];
 }
 
 function shouldUseApi6StateCheck(payment: SettlementPayment) {
@@ -1077,8 +1110,6 @@ async function runOnce() {
   });
   logStep('api6-state', `đã lưu state cho ${Object.keys(api6StateItems).length} bản ghi, thay đổi ${api6ChangedCount} bản ghi`);
 
-  const api6PaymentsForWorkbook = api6Payments.length ? api6Payments : payments;
-
   const approvalInfoBySettlementNo = Object.fromEntries(
     Object.entries(api7Responses).map(([settlementNo, response]) => [
       settlementNo,
@@ -1088,45 +1119,6 @@ async function runOnce() {
         (response as SettlementApprovalInfo),
     ]),
   );
-
-  const previousState = await loadApiState(api2StatePath);
-
-  if (api6PaymentsForWorkbook.length) {
-    const sortedPayments = sortPaymentsByRequesterAprDate(api6PaymentsForWorkbook, approvalInfoBySettlementNo);
-    const groupEfms = api6Payments.length > 0 ? 'STL_TKI' : 'OPS_MANAGEMENT';
-
-    const previousApi2State = previousState;
-    const result = await syncPaymentsToWorkbook(
-      sortedPayments,
-      approvalInfoBySettlementNo,
-      invoiceDateBySettlementId,
-      previousApi2State,
-      groupEfms,
-    );
-    logStep('workbook', `thêm ${result.added} dòng, cập nhật ${result.updated} dòng, giữ nguyên ${result.unchanged} dòng`);
-
-    const stateItems = Object.fromEntries(
-      api6PaymentsForWorkbook
-        .map((payment) => {
-          const id = getPaymentId(payment);
-          return id ? [id, stringifyPaymentSignature(payment)] : null;
-        })
-        .filter((entry): entry is [string, string] => entry !== null),
-    );
-
-    const api2ChangedCount = Object.entries(stateItems).filter(([id, signature]) => previousState.items[id] !== signature).length;
-
-    await saveApiState(api6StatePath, {
-      meta: {
-        lastRunAt: new Date().toISOString(),
-        itemCount: Object.keys(stateItems).length,
-      },
-      items: stateItems,
-    });
-    logStep('state', `API 2 thay đổi ${api2ChangedCount} bản ghi, API 6 thay đổi ${api6ChangedCount} bản ghi`);
-  } else {
-    logStep('workbook', 'không có dòng mới');
-  }
 
   logStep('api9', 'bắt đầu gọi API 9');
   const api9 = await getApi9TokenResponse();
@@ -1256,21 +1248,47 @@ async function runOnce() {
     ...api10ApprovalInfoBySettlementNo,
   };
 
-  const api10PaymentsForWorkbook = api10Payments.length ? removeNoteField(enrichPaymentsWithDetails(api10Payments, api12Responses)) : payments;
-  if (api10PaymentsForWorkbook.length) {
+  const api10PaymentsForWorkbook = api10Payments.length ? removeNoteField(enrichPaymentsWithDetails(api10Payments, api12Responses)) : [];
+  const api2PaymentsForWorkbook = api2Payments.length ? api2Payments : [];
+  const api6PaymentsForWorkbook = api6Payments.length ? api6Payments : [];
+  const combinedPaymentsForWorkbook = mergePaymentsById(api2PaymentsForWorkbook, api6PaymentsForWorkbook, api10PaymentsForWorkbook);
+  const combinedApprovalInfoBySettlementNo = {
+    ...approvalInfoBySettlementNo,
+    ...mergedApprovalInfoBySettlementNo,
+  };
+
+  if (combinedPaymentsForWorkbook.length) {
     const previousApi10WorkbookState = await loadApiState(api10StatePath);
-    const sortedApi10Payments = sortPaymentsByRequesterAprDate(api10PaymentsForWorkbook, mergedApprovalInfoBySettlementNo);
-    const resultApi10 = await syncPaymentsToWorkbook(
-      sortedApi10Payments,
-      mergedApprovalInfoBySettlementNo,
+
+    let createdWorkbookFromTemplate = false;
+
+    if (config.oneDrive) {
+      const workbook = await prepareWorkbookFromOneDrive(config.oneDrive);
+      createdWorkbookFromTemplate = workbook.createdFromTemplate;
+      logStep(
+        'onedrive',
+        createdWorkbookFromTemplate
+          ? 'không tìm thấy workbook, đã tạo mới từ template'
+          : 'đã tải workbook hiện tại',
+      );
+    } else {
+      await ensureWorkbookExists();
+    }
+
+    const sortedCombinedPayments = sortPaymentsBySettlementNoAndRequesterAprDate(
+      combinedPaymentsForWorkbook,
+      combinedApprovalInfoBySettlementNo,
+    );
+    const resultCombined = await syncPaymentsToWorkbook(
+      sortedCombinedPayments,
+      combinedApprovalInfoBySettlementNo,
       invoiceDateBySettlementId,
       previousApi10WorkbookState,
-      'STL_TKI',
     );
-    logStep('workbook', `API 10 dùng state từ ${Object.keys(previousApi10WorkbookState.items).length} bản ghi trước đó`);
+    logStep('workbook', `dùng state từ ${Object.keys(previousApi10WorkbookState.items).length} bản ghi trước đó`);
 
-    const api10WorkbookStateItems = Object.fromEntries(
-      api10PaymentsForWorkbook
+    const combinedStateItems = Object.fromEntries(
+      combinedPaymentsForWorkbook
         .map((payment) => {
           const id = getPaymentId(payment);
           return id ? [id, stringifyPaymentSignature(payment)] : null;
@@ -1281,38 +1299,32 @@ async function runOnce() {
     await saveApiState(api10StatePath, {
       meta: {
         lastRunAt: new Date().toISOString(),
-        itemCount: Object.keys(api10WorkbookStateItems).length,
+        itemCount: Object.keys(combinedStateItems).length,
       },
-      items: api10WorkbookStateItems,
+      items: combinedStateItems,
     });
 
-    logStep('api10-workbook', `thêm ${resultApi10.added} dòng, cập nhật ${resultApi10.updated} dòng, giữ nguyên ${resultApi10.unchanged} dòng`);
-    logStep('api10-state', `đã lưu state cho ${Object.keys(api10WorkbookStateItems).length} bản ghi, thay đổi ${api10ChangedCount} bản ghi`);
-  }
+    logStep('api10-workbook', `thêm ${resultCombined.added} dòng, cập nhật ${resultCombined.updated} dòng, giữ nguyên ${resultCombined.unchanged} dòng`);
+    logStep('api10-state', `đã lưu state cho ${Object.keys(combinedStateItems).length} bản ghi, thay đổi ${api10ChangedCount} bản ghi`);
 
-  if (config.oneDrive && (api6PaymentsForWorkbook.length || api10PaymentsForWorkbook.length)) {
-    let createdWorkbookFromTemplate = false;
-
-    const workbook = await prepareWorkbookFromOneDrive(config.oneDrive);
-    createdWorkbookFromTemplate = workbook.createdFromTemplate;
-    logStep(
-      'onedrive',
-      createdWorkbookFromTemplate
-        ? 'không tìm thấy workbook, đã tạo mới từ template'
-        : 'đã tải workbook hiện tại',
-    );
-
-    if (createdWorkbookFromTemplate) {
-      const uploadedFile = await uploadFileToOneDrivePath(outputWorkbookPath, config.oneDrive, remoteWorkbookName);
-      if (!uploadedFile.id) {
-        throw new Error('OneDrive path upload did not return a new file id');
+    if (config.oneDrive) {
+      if (createdWorkbookFromTemplate) {
+        const uploadedFile = await uploadFileToOneDrivePath(outputWorkbookPath, config.oneDrive, remoteWorkbookName);
+        if (!uploadedFile.id) {
+          throw new Error('OneDrive path upload did not return a new file id');
+        }
+        await updateEnvValue('ONEDRIVE_FILE_ID', uploadedFile.id);
+        logStep('onedrive', `đã cập nhật ONEDRIVE_FILE_ID=${uploadedFile.id}`);
+      } else {
+        const uploadedFile = await uploadFileToOneDrive(outputWorkbookPath, config.oneDrive);
+        if (!uploadedFile.id) {
+          throw new Error('OneDrive upload did not return a file id');
+        }
       }
-      await updateEnvValue('ONEDRIVE_FILE_ID', uploadedFile.id);
-      logStep('onedrive', `đã cập nhật ONEDRIVE_FILE_ID=${uploadedFile.id}`);
-    } else {
-      await uploadFileToOneDrive(outputWorkbookPath, config.oneDrive);
+      logStep('onedrive', 'đã cập nhật workbook');
     }
-    logStep('onedrive', 'đã cập nhật workbook');
+  } else {
+    logStep('workbook', 'không có dữ liệu để tổng hợp');
   }
 
   logStep('request', 'hoàn tất');
