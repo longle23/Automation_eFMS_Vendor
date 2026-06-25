@@ -130,7 +130,10 @@ export async function checkOneDriveFile(config: OneDriveConfig): Promise<string>
   return item.name ?? config.fileId;
 }
 
-export async function uploadFileToOneDrive(filePath: string, config: OneDriveConfig): Promise<void> {
+export async function uploadFileToOneDrive(
+  filePath: string,
+  config: OneDriveConfig,
+): Promise<DriveItemResponse> {
   const token = await getGraphAccessToken(config);
   const file = await readFile(filePath);
   const uploadResponse = await fetch(
@@ -153,6 +156,8 @@ export async function uploadFileToOneDrive(filePath: string, config: OneDriveCon
       responseText,
     );
   }
+
+  return (await uploadResponse.json()) as DriveItemResponse;
 }
 
 export async function uploadFileToOneDrivePath(
